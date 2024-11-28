@@ -58,7 +58,7 @@ int writePointCloud(const char* file, const pointCloud* pc){
     return 0;
 }
 
-statMetrics* calculateStatMetrics(pointCloud* pc){
+statMetrics* calculateStatMetrics(const pointCloud* pc){
     statMetrics *sm = (statMetrics*)malloc(sizeof(statMetrics));
     float sumX = 0;
     float sumY = 0;
@@ -152,7 +152,7 @@ pointCloud* readPointCloud(const char* file){
 
 
 int preProcessPointCloud(pointCloud* pc){
-    // (a)- remove all points with negative x values
+    // (a)/(b)- remove all points with negative x values
     int aux_i = 0;
 
     for(int i = 0; i < pc->numPts; i++){
@@ -172,7 +172,24 @@ int preProcessPointCloud(pointCloud* pc){
     pc->z = (float*)realloc(pc->z, aux_i*sizeof(float));
 
 
-    // (b)-
+    // (c)- remove outliers that aren't ground/road
+    statMetrics* sm = calculateStatMetrics(pc);
+
+    aux_i = 0;
+    for(int i = 0; i < pc->numPts; i++){
+        if(fabs(pc->z[i] - sm->avgZ) <= 1 * sm->stdZ){
+            pc->x[aux_i] = pc->x[i];
+            pc->y[aux_i] = pc->y[i];
+            pc->z[aux_i] = pc->z[i];
+            aux_i++;
+        }
+    }
+
+    pc->numPts = aux_i;
+
+    pc->x = (float*)realloc(pc->x, aux_i*sizeof(float));
+    pc->y = (float*)realloc(pc->y, aux_i*sizeof(float));
+    pc->z = (float*)realloc(pc->z, aux_i*sizeof(float));
 
     return 0;
 }
