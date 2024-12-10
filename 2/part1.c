@@ -173,6 +173,7 @@ int preProcessPointCloud(pointCloud* pc){
 
 
     // (c)- remove outliers that aren't ground/road
+    // remove outliers based on height
     statMetrics* sm = calculateStatMetrics(pc);
 
     aux_i = 0;
@@ -191,6 +192,90 @@ int preProcessPointCloud(pointCloud* pc){
     pc->y = (float*)realloc(pc->y, aux_i*sizeof(float));
     pc->z = (float*)realloc(pc->z, aux_i*sizeof(float));
 
+    // remove outliers based on X/Y distance
+    float maxX = 25.0;
+    float maxY = 15.0;
+
+    aux_i = 0;
+    for(int i = 0; i < pc->numPts; i++){
+        if(fabs(pc->x[i]) <= maxX && fabs(pc->y[i]) <= maxY){
+            pc->x[aux_i] = pc->x[i];
+            pc->y[aux_i] = pc->y[i];
+            pc->z[aux_i] = pc->z[i];
+            aux_i++;
+        }
+    }
+
+    pc->numPts = aux_i;
+
+    pc->x = (float*)realloc(pc->x, aux_i*sizeof(float));
+    pc->y = (float*)realloc(pc->y, aux_i*sizeof(float));
+    pc->z = (float*)realloc(pc->z, aux_i*sizeof(float));
+
+    return 0;
+}
+
+
+int processDrivableAreaPointCloud(pointCloud* pc){
+    float gridSize = 1.0;
+    float minZThresh = -1.5;
+    float maxZThresh = 1.5;
+    float maxZDiff = 1.0;
+
+    int gridXCount = (int)(50 / gridSize); // X grid cells
+    int gridYCount = (int)(30 / gridSize); // Y grid cells
+
+    // arrays to store min/max Z values for each grid cell
+    float* minZGrid = (float*)malloc(gridXCount * gridYCount * sizeof(float));
+    float* maxZGrid = (float*)malloc(gridXCount * gridYCount * sizeof(float));
+
+    // initialize to +infinity and -infinity so the first data point is properly loaded
+    for (int i = 0; i < gridXCount * gridYCount; i++) {
+        minZGrid[i] = INFINITY;
+        maxZGrid[i] = -INFINITY;
+    }
+
+    // calculate min and max Z per cell
+    for (int i = 0; i < pc->numPts; i++) {
+        int gridX = (int)((pc->x[i] + 25) / gridSize);
+        int gridY = (int)((pc->y[i] + 15) / gridSize);
+
+        if (gridX >= 0 && gridX < gridXCount && gridY >= 0 && gridY < gridYCount) {
+            int gridIndex = gridY * gridXCount + gridX;
+            if (pc->z[i] < minZGrid[gridIndex]) minZGrid[gridIndex] = pc->z[i];
+            if (pc->z[i] > maxZGrid[gridIndex]) maxZGrid[gridIndex] = pc->z[i];
+        }
+    }
+
+    // identify cells considered driveable according to Z values
+    int aux_i = 0;
+    for (int i = 0; i < pc->numPts; i++) {
+        int gridX = (int)((pc->x[i] + 25) / gridSize);
+        int gridY = (int)((pc->y[i] + 15) / gridSize);
+
+        if (gridX >= 0 && gridX < gridXCount && gridY >= 0 && gridY < gridYCount) {
+            int gridIndex = gridY * gridXCount + gridX;
+            float zMin = minZGrid[gridIndex];
+            float zMax = maxZGrid[gridIndex];
+
+            // check if point is driveable
+            if (zMin >= minZThresh && zMax <= maxZThresh && (zMax - zMin) <= maxZDiff) {
+                pc->x[aux_i] = pc->x[i];
+                pc->y[aux_i] = pc->y[i];
+                pc->z[aux_i] = pc->z[i];
+                aux_i++;
+            }
+        }
+    }
+
+    pc->numPts = aux_i;
+    pc->x = (float*)realloc(pc->x, aux_i * sizeof(float));
+    pc->y = (float*)realloc(pc->y, aux_i * sizeof(float));
+    pc->z = (float*)realloc(pc->z, aux_i * sizeof(float));
+
+    free(minZGrid);
+    free(maxZGrid);
+
     return 0;
 }
 
@@ -200,9 +285,6 @@ int main(int argc, char* argv[]){
     mlockall(MCL_CURRENT | MCL_FUTURE);
     int pid = getpid();
     setpriority(PRIO_PROCESS, pid, -20);
-
-    struct timespec init, end;
-    clock_gettime(CLOCK_MONOTONIC, &init);
 
     pointCloud* pc1 = readPointCloud("support_material/point_cloud1.txt");
     pointCloud* pc2 = readPointCloud("support_material/point_cloud2.txt");
@@ -226,14 +308,62 @@ int main(int argc, char* argv[]){
     printf("X: min = %f, max = %f, average = %f, standard deviation = %f\n", sm3->minX, sm3->maxX, sm3->avgX, sm3->stdX);
     printf("Y: min = %f, max = %f, average = %f, standard deviation = %f\n", sm3->minY, sm3->maxY, sm3->avgY, sm3->stdY);
     printf("Z: min = %f, max = %f, average = %f, standard deviation = %f\n", sm3->minZ, sm3->maxZ, sm3->avgZ, sm3->stdZ);
-    
-    preProcessPointCloud(pc1);
-    preProcessPointCloud(pc2);
-    preProcessPointCloud(pc3);
 
+    printf("\n");
+
+    // calculate execution time of all 3 functions for all 3 point clouds at once
+    struct timespec init, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    pc1 = readPointCloud("support_material/point_cloud1.txt");
     clock_gettime(CLOCK_MONOTONIC, &end);
-    printf("\nExecution time: %d (ms)\n", (int)(calculateElapsedTime(init, end)/1e6));
+    printf("\nExecution time (readPointCloud(pc1)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    pc2 = readPointCloud("support_material/point_cloud2.txt");
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (readPointCloud(pc2)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    pc3 = readPointCloud("support_material/point_cloud3.txt");
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (readPointCloud(pc3)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
     
+    printf("\n");
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    preProcessPointCloud(pc1);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (preProcessPointCloud(pc1)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    preProcessPointCloud(pc2);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (preProcessPointCloud(pc2)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    preProcessPointCloud(pc3);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (preProcessPointCloud(pc3)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    printf("\n");
+    
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    processDrivableAreaPointCloud(pc1);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (processDrivableAreaPointCloud(pc1)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    processDrivableAreaPointCloud(pc2);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (processDrivableAreaPointCloud(pc2)): %d (us)", (int)(calculateElapsedTime(init, end)/1e3));
+
+    clock_gettime(CLOCK_MONOTONIC, &init);
+    processDrivableAreaPointCloud(pc3);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nExecution time (processDrivableAreaPointCloud(pc3)): %d (us)\n", (int)(calculateElapsedTime(init, end)/1e3));
+
+
     writePointCloud("support_material/point_cloud1_preprocessed.txt", pc1);
     writePointCloud("support_material/point_cloud2_preprocessed.txt", pc2);
     writePointCloud("support_material/point_cloud3_preprocessed.txt", pc3);
